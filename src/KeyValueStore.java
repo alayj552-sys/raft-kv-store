@@ -26,8 +26,7 @@ public class KeyValueStore {
                 String key = sc.next();
                 String value = sc.next();
 
-                store.put(key, value);
-                saveData();
+                setValue(key, value);
 
                 System.out.println("OK");
 
@@ -36,8 +35,10 @@ public class KeyValueStore {
 
                 String key = sc.next();
 
-                if (store.containsKey(key)) {
-                    System.out.println(store.get(key));
+                String value = getValue(key);
+
+                if (value != null) {
+                    System.out.println(value);
                 } else {
                     System.out.println("KEY NOT FOUND");
                 }
@@ -47,17 +48,10 @@ public class KeyValueStore {
 
                 String key = sc.next();
 
-                if (store.containsKey(key)) {
-
-                    store.remove(key);
-                    saveData();
-
+                if (deleteValue(key)) {
                     System.out.println("DELETED");
-
                 } else {
-
                     System.out.println("KEY NOT FOUND");
-
                 }
 
             }
@@ -75,6 +69,35 @@ public class KeyValueStore {
         }
 
         sc.close();
+    }
+
+    public static void setValue(String key, String value) {
+
+        store.put(key, value);
+        saveData();
+
+    }
+
+    public static String getValue(String key) {
+
+        if (store.containsKey(key)) {
+            return store.get(key);
+        }
+
+        return null;
+    }
+
+    public static boolean deleteValue(String key) {
+
+        if (store.containsKey(key)) {
+
+            store.remove(key);
+            saveData();
+
+            return true;
+        }
+
+        return false;
     }
 
     static void saveData() {
