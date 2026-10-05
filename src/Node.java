@@ -17,9 +17,15 @@ public class Node {
     int logSize = 0;
     int commitIndex = 0;
 
+    // Heartbeat
+    long lastHeartbeatTime;
+
     public Node(int port, int[] peers) {
         this.port = port;
         this.peers = peers;
+
+        lastHeartbeatTime =
+                System.currentTimeMillis();
     }
 
     public void start() {
@@ -51,6 +57,9 @@ public class Node {
             System.out.println(
                     "Waiting for connections...");
 
+            // Start election timer
+            startElectionTimer();
+
             while (true) {
 
                 Socket socket =
@@ -63,6 +72,11 @@ public class Node {
 
                 String message =
                         in.readLine();
+
+                if (message == null) {
+                    socket.close();
+                    continue;
+                }
 
                 System.out.println(
                         "Message received: " + message);
@@ -101,6 +115,12 @@ public class Node {
                     handleLogEntry(message);
                 }
 
+                else if (message.startsWith(
+                        "HEARTBEAT ")) {
+
+                    handleHeartbeat(message);
+                }
+
                 socket.close();
             }
 
@@ -113,259 +133,76 @@ public class Node {
         }
     }
 
-    public void processCommand(
-            String message,
-            boolean replicate) {
+    // Election timer
+    public void startElectionTimer() {
 
-        String[] parts =
-                message.split(" ");
+        Thread timer =
+                new Thread(() -> {
 
-        if (parts[0].equalsIgnoreCase("SET")) {
+                    while (true) {
 
-            if (parts.length >= 3) {
+                        try {
 
-                String key =
-                        parts[1];
+                            Thread.sleep(500);
 
-                String value =
-                        parts[2];
+                        }
+                        catch (InterruptedException e) {
 
-                // Add command to Raft log
-                addLogEntry(message);
+                            return;
+                        }
 
-                // Apply command to local store
-                KeyValueStore.setValue(
-                        key,
-                        value);
+                        if (role.equals("LEADER")) {
 
-                System.out.println(
-                        "SET successful: "
-                        + key + " = " + value);
+                            continue;
+                        }
 
-                // Replicate log to followers
-                if (replicate) {
+                        long currentTime =
+                                System.currentTimeMillis();
 
-                    replicateToPeers(
-                            message);
-                }
-            }
-        }
+                        long elapsed =
+                                currentTime
+                                - lastHeartbeatTime;
 
-        else if (parts[0].equalsIgnoreCase("GET")) {
+                        // Different timeout for each node
+                        long timeout;
 
-            if (parts.length >= 2) {
+                        if (port == 5001) {
+                            timeout = 3000;
+                        }
+                        else if (port == 5002) {
+                            timeout = 5000;
+                        }
+                        else {
+                            timeout = 7000;
+                        }
 
-                String key =
-                        parts[1];
+                        if (elapsed >= timeout) {
 
-                String value =
-                        KeyValueStore.getValue(
-                                key);
-
-                if (value != null) {
-
-                    System.out.println(
-                            "GET result: "
-                            + value);
-                }
-
-                else {
-
-                    System.out.println(
-                            "KEY NOT FOUND");
-                }
-            }
-        }
-
-        else if (parts[0].equalsIgnoreCase("DELETE")) {
-
-            if (parts.length >= 2) {
-
-                String key =
-                        parts[1];
-
-                boolean deleted =
-                        KeyValueStore.deleteValue(
-                                key);
-
-                if (deleted) {
-
-                    System.out.println(
-                            "DELETE successful: "
-                            + key);
-                }
-
-                else {
-
-                    System.out.println(
-                            "KEY NOT FOUND");
-                }
-
-                if (replicate) {
-
-                    replicateToPeers(
-                            message);
-                }
-            }
-        }
-
-        else {
-
-            System.out.println(
-                    "Unknown command");
-        }
-    }
-
-    // Add command to local Raft log
-    public void addLogEntry(
-            String command) {
-
-        if (logSize < log.length) {
-
-            log[logSize] =
-                    command;
-
-            logSize++;
-
-            System.out.println(
-                    "Log entry added: "
-                    + command);
-
-            System.out.println(
-                    "Log index: "
-                    + logSize);
-        }
-
-        else {
-
-            System.out.println(
-                    "Log is full");
-        }
-    }
-
-    // Replicate log entry to followers
-    public void replicateToPeers(
-            String message) {
-
-        for (int peer : peers) {
-
-            try {
-
-                Socket socket =
-                        new Socket(
-                                "localhost",
-                                peer);
-
-                PrintWriter out =
-                        new PrintWriter(
-                                socket.getOutputStream(),
-                                true);
-
-                out.println(
-                        "LOG_ENTRY "
-                        + currentTerm
-                        + " "
-                        + message);
-
-                System.out.println(
-                        "Log replicated to Node "
-                        + peer);
-
-                socket.close();
-            }
-
-            catch (IOException e) {
-
-                System.out.println(
-                        "Could not replicate log to Node "
-                        + peer);
-            }
-        }
-    }
-
-    // Handle incoming log entry
-    public void handleLogEntry(
-            String message) {
-
-        try {
-
-            String[] parts =
-                    message.split(" ", 3);
-
-            int leaderTerm =
-                    Integer.parseInt(
-                            parts[1]);
-
-            String command =
-                    parts[2];
-
-            if (leaderTerm >= currentTerm) {
-
-                currentTerm =
-                        leaderTerm;
-
-                role =
-                        "FOLLOWER";
-
-                if (logSize < log.length) {
-
-                    log[logSize] =
-                            command;
-
-                    logSize++;
-
-                    System.out.println(
-                            "Log entry received: "
-                            + command);
-
-                    System.out.println(
-                            "Log index: "
-                            + logSize);
-
-                    String[] commandParts =
-                            command.split(" ");
-
-                    // Apply SET command
-                    if (commandParts[0]
-                            .equalsIgnoreCase("SET")) {
-
-                        if (commandParts.length >= 3) {
-
-                            KeyValueStore.setValue(
-                                    commandParts[1],
-                                    commandParts[2]);
+                            System.out.println();
 
                             System.out.println(
-                                    "Command applied to store");
+                                    "Election timeout on Node "
+                                    + port);
+
+                            lastHeartbeatTime =
+                                    System.currentTimeMillis();
+
+                            startElection();
                         }
                     }
 
-                    // Apply DELETE command
-                    else if (commandParts[0]
-                            .equalsIgnoreCase("DELETE")) {
+                });
 
-                        if (commandParts.length >= 2) {
-
-                            KeyValueStore.deleteValue(
-                                    commandParts[1]);
-
-                            System.out.println(
-                                    "Command applied to store");
-                        }
-                    }
-                }
-            }
-        }
-
-        catch (Exception e) {
-
-            System.out.println(
-                    "Error handling log entry");
-        }
+        timer.setDaemon(true);
+        timer.start();
     }
 
     // Start Raft election
-    public void startElection() {
+    public synchronized void startElection() {
+
+        if (role.equals("LEADER")) {
+            return;
+        }
 
         role =
                 "CANDIDATE";
@@ -407,7 +244,7 @@ public class Node {
         requestVotes();
     }
 
-    // Request votes from followers
+    // Request votes
     public void requestVotes() {
 
         for (int peer : peers) {
@@ -514,6 +351,9 @@ public class Node {
                 votedFor =
                         candidatePort;
 
+                lastHeartbeatTime =
+                        System.currentTimeMillis();
+
                 out.println(
                         "VOTE_GRANTED");
 
@@ -574,6 +414,373 @@ public class Node {
 
             System.out.println(
                     "================================");
+
+            // Start heartbeat
+            startHeartbeat();
+        }
+    }
+
+    // Leader heartbeat
+    public void startHeartbeat() {
+
+        Thread heartbeat =
+                new Thread(() -> {
+
+                    while (role.equals("LEADER")) {
+
+                        sendHeartbeat();
+
+                        try {
+
+                            Thread.sleep(2000);
+
+                        }
+                        catch (InterruptedException e) {
+
+                            return;
+                        }
+                    }
+
+                });
+
+        heartbeat.setDaemon(true);
+        heartbeat.start();
+    }
+
+    // Send heartbeat to followers
+    public void sendHeartbeat() {
+
+        for (int peer : peers) {
+
+            try {
+
+                Socket socket =
+                        new Socket(
+                                "localhost",
+                                peer);
+
+                PrintWriter out =
+                        new PrintWriter(
+                                socket.getOutputStream(),
+                                true);
+
+                out.println(
+                        "HEARTBEAT "
+                        + currentTerm
+                        + " "
+                        + port);
+
+                System.out.println(
+                        "Heartbeat sent to Node "
+                        + peer);
+
+                socket.close();
+            }
+
+            catch (IOException e) {
+
+                System.out.println(
+                        "Node " + peer
+                        + " is unavailable");
+            }
+        }
+    }
+
+    // Handle heartbeat
+    public void handleHeartbeat(
+            String message) {
+
+        try {
+
+            String[] parts =
+                    message.split(" ");
+
+            int leaderTerm =
+                    Integer.parseInt(
+                            parts[1]);
+
+            int leaderPort =
+                    Integer.parseInt(
+                            parts[2]);
+
+            if (leaderTerm >= currentTerm) {
+
+                currentTerm =
+                        leaderTerm;
+
+                role =
+                        "FOLLOWER";
+
+                votedFor =
+                        -1;
+
+                lastHeartbeatTime =
+                        System.currentTimeMillis();
+
+                System.out.println(
+                        "Heartbeat received from Leader "
+                        + leaderPort);
+
+                System.out.println(
+                        "Term: "
+                        + currentTerm);
+            }
+
+        }
+        catch (Exception e) {
+
+            System.out.println(
+                    "Error handling heartbeat");
+        }
+    }
+
+    // Process client command
+    public void processCommand(
+            String message,
+            boolean replicate) {
+
+        String[] parts =
+                message.split(" ");
+
+        if (parts[0].equalsIgnoreCase("SET")) {
+
+            if (parts.length >= 3) {
+
+                String key =
+                        parts[1];
+
+                String value =
+                        parts[2];
+
+                addLogEntry(message);
+
+                KeyValueStore.setValue(
+                        key,
+                        value);
+
+                System.out.println(
+                        "SET successful: "
+                        + key + " = " + value);
+
+                if (replicate) {
+
+                    replicateToPeers(
+                            message);
+                }
+            }
+        }
+
+        else if (parts[0].equalsIgnoreCase("GET")) {
+
+            if (parts.length >= 2) {
+
+                String key =
+                        parts[1];
+
+                String value =
+                        KeyValueStore.getValue(
+                                key);
+
+                if (value != null) {
+
+                    System.out.println(
+                            "GET result: "
+                            + value);
+                }
+
+                else {
+
+                    System.out.println(
+                            "KEY NOT FOUND");
+                }
+            }
+        }
+
+        else if (parts[0].equalsIgnoreCase("DELETE")) {
+
+            if (parts.length >= 2) {
+
+                String key =
+                        parts[1];
+
+                boolean deleted =
+                        KeyValueStore.deleteValue(
+                                key);
+
+                if (deleted) {
+
+                    System.out.println(
+                            "DELETE successful: "
+                            + key);
+                }
+
+                else {
+
+                    System.out.println(
+                            "KEY NOT FOUND");
+                }
+
+                if (replicate) {
+
+                    replicateToPeers(
+                            message);
+                }
+            }
+        }
+
+        else {
+
+            System.out.println(
+                    "Unknown command");
+        }
+    }
+
+    // Add log entry
+    public void addLogEntry(
+            String command) {
+
+        if (logSize < log.length) {
+
+            log[logSize] =
+                    command;
+
+            logSize++;
+
+            System.out.println(
+                    "Log entry added: "
+                    + command);
+
+            System.out.println(
+                    "Log index: "
+                    + logSize);
+        }
+
+        else {
+
+            System.out.println(
+                    "Log is full");
+        }
+    }
+
+    // Replicate log
+    public void replicateToPeers(
+            String message) {
+
+        for (int peer : peers) {
+
+            try {
+
+                Socket socket =
+                        new Socket(
+                                "localhost",
+                                peer);
+
+                PrintWriter out =
+                        new PrintWriter(
+                                socket.getOutputStream(),
+                                true);
+
+                out.println(
+                        "LOG_ENTRY "
+                        + currentTerm
+                        + " "
+                        + message);
+
+                System.out.println(
+                        "Log replicated to Node "
+                        + peer);
+
+                socket.close();
+            }
+
+            catch (IOException e) {
+
+                System.out.println(
+                        "Could not replicate log to Node "
+                        + peer);
+            }
+        }
+    }
+
+    // Handle log entry
+    public void handleLogEntry(
+            String message) {
+
+        try {
+
+            String[] parts =
+                    message.split(" ", 3);
+
+            int leaderTerm =
+                    Integer.parseInt(
+                            parts[1]);
+
+            String command =
+                    parts[2];
+
+            if (leaderTerm >= currentTerm) {
+
+                currentTerm =
+                        leaderTerm;
+
+                role =
+                        "FOLLOWER";
+
+                lastHeartbeatTime =
+                        System.currentTimeMillis();
+
+                if (logSize < log.length) {
+
+                    log[logSize] =
+                            command;
+
+                    logSize++;
+
+                    System.out.println(
+                            "Log entry received: "
+                            + command);
+
+                    System.out.println(
+                            "Log index: "
+                            + logSize);
+
+                    String[] commandParts =
+                            command.split(" ");
+
+                    if (commandParts[0]
+                            .equalsIgnoreCase("SET")) {
+
+                        if (commandParts.length >= 3) {
+
+                            KeyValueStore.setValue(
+                                    commandParts[1],
+                                    commandParts[2]);
+
+                            System.out.println(
+                                    "Command applied to store");
+                        }
+                    }
+
+                    else if (commandParts[0]
+                            .equalsIgnoreCase("DELETE")) {
+
+                        if (commandParts.length >= 2) {
+
+                            KeyValueStore.deleteValue(
+                                    commandParts[1]);
+
+                            System.out.println(
+                                    "Command applied to store");
+                        }
+                    }
+                }
+            }
+        }
+
+        catch (Exception e) {
+
+            System.out.println(
+                    "Error handling log entry");
         }
     }
 
@@ -617,13 +824,6 @@ public class Node {
                 new Node(
                         port,
                         peers);
-
-        // Only Node 5001 starts
-        // the first election
-        if (port == 5001) {
-
-            node.startElection();
-        }
 
         node.start();
     }
